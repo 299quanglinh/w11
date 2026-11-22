@@ -1,17 +1,36 @@
 namespace CampusSafetyHub;
 
+/*
+================================================================================
+BÀI THỰC HÀNH MẪU THIẾT KẾ: CAMPUS SAFETY HUB
+- Adapter Pattern: Tích hợp cảm biến khói cũ (LegacySmokeDetector -> SmokeSensorAdapter)
+- Observer Pattern: Giám sát và phát cảnh báo đa kênh (SensorMonitor -> IAlertObserver)
+- Mediator Pattern: Điều phối các thiết bị ứng phó sự cố (EmergencyMediator)
+
+TRẢ LỜI CÁC CÂU HỎI THIẾT KẾ:
+1. Adapter nên kế thừa hay chứa LegacySmokeDetector?
+   -> Chứa (Composition): Ưu tiên composition over inheritance, giữ lớp cũ nguyên vẹn và linh hoạt.
+2. SensorMonitor có nên biết EmailAlertObserver cụ thể không?
+   -> Không: Chỉ phụ thuộc vào trừu tượng IAlertObserver (DIP & OCP), cho phép thêm/bớt observer động.
+3. Alarm có cần tham chiếu đến DoorController không?
+   -> Không: Các thiết bị không phụ thuộc trực tiếp nhau, giao tiếp tập trung qua EmergencyMediator.
+4. Ai chịu trách nhiệm quyết định giá trị nào là vượt ngưỡng?
+   -> SensorMonitor (trong CheckSensor dựa trên thang đo đã chuẩn hóa).
+================================================================================
+*/
+
 // ==========================================
-// 1. GIAO DIEN CHUAN & MODEL
+// 1. GIAO DIỆN CẢM BIẾN & DỮ LIỆU CẢNH BÁO
 // ==========================================
 
-// Giao dien chuan ma module giam sat su dung
+// Giao diện chuẩn mà module giám sát sử dụng
 public interface ISensor
 {
     double ReadValue();
     string GetUnit();
 }
 
-// Doi tuong du lieu bat bien mo ta canh bao
+// Đối tượng dữ liệu bất biến mô tả cảnh báo
 public sealed record AlertEvent(
     string SensorName,
     double Value,
@@ -23,7 +42,7 @@ public sealed record AlertEvent(
 // 2. ADAPTER PATTERN
 // ==========================================
 
-// Lop co san tu he thong cu, gia dinh khong duoc sua doi
+// Lớp có sẵn, giả định từ thư viện bên ngoài không được sửa đổi
 public sealed class LegacySmokeDetector
 {
     private int smokeLevel;
@@ -33,7 +52,7 @@ public sealed class LegacySmokeDetector
         this.smokeLevel = smokeLevel;
     }
 
-    public int GetSmokeLevel() => smokeLevel; // Thang do 0..1000
+    public int GetSmokeLevel() => smokeLevel; // Thang đo 0..1000
 
     public string GetDescription() => "Legacy smoke detector";
 
@@ -43,8 +62,7 @@ public sealed class LegacySmokeDetector
     }
 }
 
-// Adapter chuyen doi giao dien cu sang ISensor va chuan hoa gia tri ve 0..100%
-// Su dung thanh phan chua (composition) thay vi ke thua de tranh phu thuoc chat
+// Adapter chuyển đổi giao diện cũ sang ISensor và chuẩn hóa thang đo 0..1000 thành 0..100%
 public sealed class SmokeSensorAdapter : ISensor
 {
     private readonly LegacySmokeDetector legacy;
@@ -66,13 +84,13 @@ public sealed class SmokeSensorAdapter : ISensor
 // 3. OBSERVER PATTERN
 // ==========================================
 
-// Hop dong nhan canh bao
+// Hợp đồng nhận cảnh báo
 public interface IAlertObserver
 {
     void Update(AlertEvent alertEvent);
 }
 
-// Subject: Quan ly observers, doc sensor va phat canh bao khi vuot nguong
+// Subject: Quản lý observers, đọc sensor, so ngưỡng và phát cảnh báo
 public sealed class SensorMonitor
 {
     private readonly List<IAlertObserver> observers = new();
@@ -81,7 +99,7 @@ public sealed class SensorMonitor
     {
         ArgumentNullException.ThrowIfNull(observer);
 
-        // Yeu cau 1: Khong cho phep mot observer dang ky 2 lan
+        // Yêu cầu 1: Không cho cùng một observer đăng ký hai lần
         if (!observers.Contains(observer))
         {
             observers.Add(observer);
@@ -90,7 +108,7 @@ public sealed class SensorMonitor
 
     public void Detach(IAlertObserver observer)
     {
-        // Yeu cau 2: Co the huy dang ky observer
+        // Yêu cầu 2: Có thể hủy đăng ký observer
         observers.Remove(observer);
     }
 
@@ -100,10 +118,10 @@ public sealed class SensorMonitor
 
         double value = sensor.ReadValue();
 
-        // Quy uoc muc do theo de bai:
-        // Duoi 50%: Binh thuong, khong phat canh bao
-        // Tu 50% den duoi 70%: WARNING
-        // Tu 70% tro len: CRITICAL
+        // Quy ước mức độ:
+        // Dưới 50%: Bình thường, không phát cảnh báo
+        // Từ 50% đến dưới 70%: WARNING
+        // Từ 70% trở lên: CRITICAL
         string? severity = value switch
         {
             >= 70 => "CRITICAL",
@@ -128,24 +146,24 @@ public sealed class SensorMonitor
 
     private void Notify(AlertEvent alertEvent)
     {
-        // Yeu cau 3: Duyet tren ToArray() de tranh loi khi danh sach bi sua doi trong luc lap
+        // Yêu cầu 3: Duyệt trên ToArray() để observer có thể bị gỡ khi đang thông báo mà không hỏng vòng lặp
         foreach (IAlertObserver observer in observers.ToArray())
         {
             try
             {
-                // Yeu cau 4: AlertEvent la record bat bien, observer khong the sua doi du lieu
+                // Yêu cầu 4: AlertEvent là record bất biến, observer không thể sửa đổi
                 observer.Update(alertEvent);
             }
             catch (Exception ex)
             {
-                // Yeu cau 5: Observer loi khong duoc lam hong cac observer khac, bat loi va ghi log
-                Console.WriteLine($"[MONITOR LOG] Loi tai observer {observer.GetType().Name}: {ex.Message}");
+                // Yêu cầu 5: Một observer lỗi không được làm sai dữ liệu của observer khác
+                Console.WriteLine($"[MONITOR LOG] Lỗi tại {observer.GetType().Name}: {ex.Message}");
             }
         }
     }
 }
 
-// Observer hien thi bang tin
+// Các observer nhận cảnh báo
 public sealed class DashboardObserver : IAlertObserver
 {
     public void Update(AlertEvent alertEvent)
@@ -157,23 +175,21 @@ public sealed class DashboardObserver : IAlertObserver
     }
 }
 
-// Observer gui email thong bao
 public sealed class EmailAlertObserver : IAlertObserver
 {
     private readonly string recipientEmail;
 
-    public EmailAlertObserver(string recipientEmail = "safety@campus.edu.vn")
+    public EmailAlertObserver(string recipientEmail = "safety-team@campus.edu.vn")
     {
         this.recipientEmail = recipientEmail;
     }
 
     public void Update(AlertEvent alertEvent)
     {
-        Console.WriteLine($"[EMAIL] To: <{recipientEmail}> | Canh bao {alertEvent.Severity} tai {alertEvent.SensorName} ({alertEvent.Value:F1}{alertEvent.Unit})");
+        Console.WriteLine($"[EMAIL] Gửi tới <{recipientEmail}>: Cảnh báo {alertEvent.Severity} tại {alertEvent.SensorName} ({alertEvent.Value:F1}{alertEvent.Unit})");
     }
 }
 
-// Observer ghi nhat ky he thong
 public sealed class AuditLogObserver : IAlertObserver
 {
     public void Update(AlertEvent alertEvent)
@@ -183,37 +199,37 @@ public sealed class AuditLogObserver : IAlertObserver
 }
 
 // ==========================================
-// 4. MEDIATOR PATTERN & COLLEAGUES
+// 4. MEDIATOR PATTERN & THIẾT BỊ ỨNG PHÓ
 // ==========================================
 
-// Hop dong dieu phoi
+// Hợp đồng điều phối
 public interface IEmergencyMediator
 {
     void Notify(string eventType);
 }
 
-// Thiet bi 1: Coi bao dong
+// Thiết bị: Còi báo động
 public sealed class Alarm
 {
-    public void Activate() => Console.WriteLine("[ALARM] Coi bao dong da bat! Phat tin hieu so tan toan khu vuc.");
-    public void Deactivate() => Console.WriteLine("[ALARM] Da tat coi bao dong.");
+    public void Activate() => Console.WriteLine("[ALARM] Còi báo động đã bật! Phát tín hiệu sơ tán khẩn cấp.");
+    public void Deactivate() => Console.WriteLine("[ALARM] Đã tắt còi báo động.");
 }
 
-// Thiet bi 2: He thong kiem soat cua
+// Thiết bị: Kiểm soát cửa
 public sealed class DoorController
 {
-    public void UnlockAll() => Console.WriteLine("[DOOR] Da mo toan bo cua thoat hiem phong may.");
-    public void LockAll() => Console.WriteLine("[DOOR] Da khoa toan bo cua phong may.");
+    public void UnlockAll() => Console.WriteLine("[DOOR] Đã mở khóa toàn bộ cửa thoát hiểm phòng máy.");
+    public void LockAll() => Console.WriteLine("[DOOR] Đã khóa các cửa phòng máy.");
 }
 
-// Thiet bi 3: He thong quat thong gio
+// Thiết bị: Quạt thông gió
 public sealed class VentilationController
 {
-    public void EnableEmergencyMode() => Console.WriteLine("[VENTILATION] Da ngat he thong dieu hoa, bat quat hut khoi khan cap.");
-    public void SetNormalMode() => Console.WriteLine("[VENTILATION] He thong thong gio tro ve che do binh thuong.");
+    public void EnableEmergencyMode() => Console.WriteLine("[VENTILATION] Đã ngắt điều hòa, kích hoạt quạt hút khói công suất cao.");
+    public void SetNormalMode() => Console.WriteLine("[VENTILATION] Hệ thống thông gió trở về chế độ tiêu chuẩn.");
 }
 
-// Mediator dieu phoi cac thiet bi ung pho khan cap
+// Mediator: Phối hợp alarm, door và ventilation khi có sự kiện khẩn cấp
 public sealed class EmergencyMediator : IEmergencyMediator
 {
     private readonly Alarm alarm;
@@ -231,7 +247,7 @@ public sealed class EmergencyMediator : IEmergencyMediator
     {
         if (eventType == "FIRE_DETECTED")
         {
-            Console.WriteLine("[MEDIATOR] Nhan su kien FIRE_DETECTED -> Phối hợp các thiết bị ứng phó:");
+            Console.WriteLine("[MEDIATOR] Nhận sự kiện FIRE_DETECTED -> Bắt đầu điều phối các thiết bị ứng phó:");
             alarm.Activate();
             doorController.UnlockAll();
             ventilationController.EnableEmergencyMode();
@@ -239,7 +255,7 @@ public sealed class EmergencyMediator : IEmergencyMediator
     }
 }
 
-// Bridge Observer: Chuyen canh bao CRITICAL thanh su kien cho Mediator
+// Cầu nối: Chuyển cảnh báo CRITICAL thành sự kiện FIRE_DETECTED cho Mediator
 public sealed class EmergencyBridgeObserver : IAlertObserver
 {
     private readonly IEmergencyMediator mediator;
@@ -253,25 +269,101 @@ public sealed class EmergencyBridgeObserver : IAlertObserver
     {
         if (alertEvent.Severity == "CRITICAL")
         {
-            Console.WriteLine($"[BRIDGE] Phat hien nguy cap CRITICAL tai {alertEvent.SensorName}, chuyen su kien cho Mediator...");
+            Console.WriteLine($"[BRIDGE] Phát hiện mức độ CRITICAL tại {alertEvent.SensorName}, chuyển sự kiện cho Mediator...");
             mediator.Notify("FIRE_DETECTED");
         }
     }
 }
 
+// Observer giả lập dùng để kiểm thử tính năng bắt lỗi
+public sealed class FaultyObserver : IAlertObserver
+{
+    public void Update(AlertEvent alertEvent)
+    {
+        throw new InvalidOperationException("Mất kết nối mạng đột ngột!");
+    }
+}
+
+// ==========================================
+// 5. CHƯƠNG TRÌNH CHÍNH & KỊCH BẢN MÔ PHỎNG
+// ==========================================
+
 public class Program
 {
     public static void Main()
     {
+        Console.OutputEncoding = System.Text.Encoding.UTF8;
+        Console.WriteLine("===============================================================");
+        Console.WriteLine("      MÔ PHỎNG TRUNG TÂM GIÁM SÁT AN TOÀN - CAMPUS SAFETY HUB   ");
+        Console.WriteLine("===============================================================\n");
+
+        // 1. Khởi tạo các thiết bị ứng phó và Mediator
         var alarm = new Alarm();
-        var door = new DoorController();
-        var vent = new VentilationController();
-        var mediator = new EmergencyMediator(alarm, door, vent);
+        var doorController = new DoorController();
+        var ventilationController = new VentilationController();
+        var mediator = new EmergencyMediator(alarm, doorController, ventilationController);
 
-        var bridge = new EmergencyBridgeObserver(mediator);
-        var alert = new AlertEvent("ServerRoom_Smoke", 75.0, "% smoke", "CRITICAL", DateTime.Now);
+        // 2. Tích hợp cảm biến khói cũ qua Adapter
+        var legacyDetector = new LegacySmokeDetector(350);
+        ISensor smokeSensor = new SmokeSensorAdapter(legacyDetector);
 
-        Console.WriteLine("Test EmergencyBridgeObserver kich hoat mediator:");
-        bridge.Update(alert);
+        // 3. Khởi tạo trung tâm giám sát và gắn các observer
+        var monitor = new SensorMonitor();
+        var dashboard = new DashboardObserver();
+        var emailAlert = new EmailAlertObserver("admin-datacenter@campus.edu.vn");
+        var auditLog = new AuditLogObserver();
+        var emergencyBridge = new EmergencyBridgeObserver(mediator);
+
+        monitor.Attach(dashboard);
+        monitor.Attach(emailAlert);
+        monitor.Attach(auditLog);
+        monitor.Attach(emergencyBridge);
+
+        // -------------------------------------------------------------
+        // KỊCH BẢN 1: Mức khói 350 (35.0%) -> Bình thường (< 50%)
+        // -------------------------------------------------------------
+        Console.WriteLine(">>> KỊCH BẢN 1: Mức khói ở mức bình thường (350 / 1000 = 35.0%)");
+        legacyDetector.SetSmokeLevel(350);
+        monitor.CheckSensor("SmokeDetector_Rack01", smokeSensor);
+        Console.WriteLine("=> Kết quả: Dưới 50%, hệ thống an toàn, không phát cảnh báo.\n");
+
+        // -------------------------------------------------------------
+        // KỊCH BẢN 2: Mức khói 620 (62.0%) -> Cảnh báo WARNING (50% - 70%)
+        // -------------------------------------------------------------
+        Console.WriteLine(">>> KỊCH BẢN 2: Mức khói tăng lên ngưỡng WARNING (620 / 1000 = 62.0%)");
+        legacyDetector.SetSmokeLevel(620);
+        monitor.CheckSensor("SmokeDetector_Rack01", smokeSensor);
+        Console.WriteLine("=> Kết quả: Các observer thông báo, Mediator chưa được kích hoạt.\n");
+
+        // -------------------------------------------------------------
+        // KỊCH BẢN 3: Mức khói 850 (85.0%) -> Cảnh báo CRITICAL (>= 70%)
+        // -------------------------------------------------------------
+        Console.WriteLine(">>> KỊCH BẢN 3: Mức khói chạm ngưỡng CRITICAL (850 / 1000 = 85.0%)");
+        legacyDetector.SetSmokeLevel(850);
+        monitor.CheckSensor("SmokeDetector_Rack01", smokeSensor);
+        Console.WriteLine("=> Kết quả: Bridge nhận diện CRITICAL -> Kích hoạt Mediator điều phối các thiết bị.\n");
+
+        // -------------------------------------------------------------
+        // KỊCH BẢN 4: Hủy đăng ký EmailAlertObserver và kiểm tra lại
+        // -------------------------------------------------------------
+        Console.WriteLine(">>> KỊCH BẢN 4: Hủy đăng ký EmailAlertObserver (Detach) và test lại");
+        monitor.Detach(emailAlert);
+        legacyDetector.SetSmokeLevel(720);
+        monitor.CheckSensor("SmokeDetector_Rack01", smokeSensor);
+        Console.WriteLine("=> Kết quả: EmailAlertObserver đã bị gỡ bỏ, không nhận cảnh báo nữa.\n");
+
+        // -------------------------------------------------------------
+        // KỊCH BẢN 5: Kiểm tra cơ chế cách ly lỗi observer
+        // -------------------------------------------------------------
+        Console.WriteLine(">>> KỊCH BẢN 5: Observer gặp sự cố ngoại lệ (Fault Isolation)");
+        var faultyObserver = new FaultyObserver();
+        monitor.Attach(faultyObserver);
+        legacyDetector.SetSmokeLevel(580);
+        monitor.CheckSensor("SmokeDetector_Rack01", smokeSensor);
+        Console.WriteLine("=> Kết quả: FaultyObserver báo lỗi nhưng các observer khác vẫn nhận dữ liệu bình thường.\n");
+
+        Console.WriteLine("===============================================================");
+        Console.WriteLine("                  HOÀN THÀNH MÔ PHỎNG AN TOÀN                  ");
+        Console.WriteLine("===============================================================");
     }
 }
