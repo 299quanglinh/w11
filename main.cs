@@ -23,7 +23,7 @@ public sealed record AlertEvent(
 // 2. ADAPTER PATTERN
 // ==========================================
 
-// Lop co san tu he thong cu, khong duoc sua doi
+// Lop co san tu he thong cu, gia dinh khong duoc sua doi
 public sealed class LegacySmokeDetector
 {
     private int smokeLevel;
@@ -44,6 +44,7 @@ public sealed class LegacySmokeDetector
 }
 
 // Adapter chuyen doi giao dien cu sang ISensor va chuan hoa gia tri ve 0..100%
+// Su dung thanh phan chua (composition) thay vi ke thua de tranh phu thuoc chat
 public sealed class SmokeSensorAdapter : ISensor
 {
     private readonly LegacySmokeDetector legacy;
@@ -100,7 +101,7 @@ public sealed class SensorMonitor
         double value = sensor.ReadValue();
 
         // Quy uoc muc do theo de bai:
-        // Dưới 50%: Binh thuong, khong phat canh bao
+        // Duoi 50%: Binh thuong, khong phat canh bao
         // Tu 50% den duoi 70%: WARNING
         // Tu 70% tro len: CRITICAL
         string? severity = value switch
@@ -181,19 +182,96 @@ public sealed class AuditLogObserver : IAlertObserver
     }
 }
 
+// ==========================================
+// 4. MEDIATOR PATTERN & COLLEAGUES
+// ==========================================
+
+// Hop dong dieu phoi
+public interface IEmergencyMediator
+{
+    void Notify(string eventType);
+}
+
+// Thiet bi 1: Coi bao dong
+public sealed class Alarm
+{
+    public void Activate() => Console.WriteLine("[ALARM] Coi bao dong da bat! Phat tin hieu so tan toan khu vuc.");
+    public void Deactivate() => Console.WriteLine("[ALARM] Da tat coi bao dong.");
+}
+
+// Thiet bi 2: He thong kiem soat cua
+public sealed class DoorController
+{
+    public void UnlockAll() => Console.WriteLine("[DOOR] Da mo toan bo cua thoat hiem phong may.");
+    public void LockAll() => Console.WriteLine("[DOOR] Da khoa toan bo cua phong may.");
+}
+
+// Thiet bi 3: He thong quat thong gio
+public sealed class VentilationController
+{
+    public void EnableEmergencyMode() => Console.WriteLine("[VENTILATION] Da ngat he thong dieu hoa, bat quat hut khoi khan cap.");
+    public void SetNormalMode() => Console.WriteLine("[VENTILATION] He thong thong gio tro ve che do binh thuong.");
+}
+
+// Mediator dieu phoi cac thiet bi ung pho khan cap
+public sealed class EmergencyMediator : IEmergencyMediator
+{
+    private readonly Alarm alarm;
+    private readonly DoorController doorController;
+    private readonly VentilationController ventilationController;
+
+    public EmergencyMediator(Alarm alarm, DoorController doorController, VentilationController ventilationController)
+    {
+        this.alarm = alarm ?? throw new ArgumentNullException(nameof(alarm));
+        this.doorController = doorController ?? throw new ArgumentNullException(nameof(doorController));
+        this.ventilationController = ventilationController ?? throw new ArgumentNullException(nameof(ventilationController));
+    }
+
+    public void Notify(string eventType)
+    {
+        if (eventType == "FIRE_DETECTED")
+        {
+            Console.WriteLine("[MEDIATOR] Nhan su kien FIRE_DETECTED -> Phối hợp các thiết bị ứng phó:");
+            alarm.Activate();
+            doorController.UnlockAll();
+            ventilationController.EnableEmergencyMode();
+        }
+    }
+}
+
+// Bridge Observer: Chuyen canh bao CRITICAL thanh su kien cho Mediator
+public sealed class EmergencyBridgeObserver : IAlertObserver
+{
+    private readonly IEmergencyMediator mediator;
+
+    public EmergencyBridgeObserver(IEmergencyMediator mediator)
+    {
+        this.mediator = mediator ?? throw new ArgumentNullException(nameof(mediator));
+    }
+
+    public void Update(AlertEvent alertEvent)
+    {
+        if (alertEvent.Severity == "CRITICAL")
+        {
+            Console.WriteLine($"[BRIDGE] Phat hien nguy cap CRITICAL tai {alertEvent.SensorName}, chuyen su kien cho Mediator...");
+            mediator.Notify("FIRE_DETECTED");
+        }
+    }
+}
+
 public class Program
 {
     public static void Main()
     {
-        var legacy = new LegacySmokeDetector(650);
-        ISensor sensor = new SmokeSensorAdapter(legacy);
+        var alarm = new Alarm();
+        var door = new DoorController();
+        var vent = new VentilationController();
+        var mediator = new EmergencyMediator(alarm, door, vent);
 
-        var monitor = new SensorMonitor();
-        monitor.Attach(new DashboardObserver());
-        monitor.Attach(new EmailAlertObserver());
-        monitor.Attach(new AuditLogObserver());
+        var bridge = new EmergencyBridgeObserver(mediator);
+        var alert = new AlertEvent("ServerRoom_Smoke", 75.0, "% smoke", "CRITICAL", DateTime.Now);
 
-        Console.WriteLine("Test SensorMonitor voi muc khoi 650 (65% -> WARNING):");
-        monitor.CheckSensor("SmokeSensor_Room1", sensor);
+        Console.WriteLine("Test EmergencyBridgeObserver kich hoat mediator:");
+        bridge.Update(alert);
     }
 }
